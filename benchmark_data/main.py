@@ -1,8 +1,7 @@
 import os
 import fire
 from data_gen import (
-    prepare_bench, 
-    create_dataset_info
+    prepare_bench
 )
 
 os.environ["DISABLE_VERSION_CHECK"] = "1"
@@ -13,5 +12,4 @@ os.makedirs(os.path.join(os.environ["BENCHMARK_DATASET_DIR"], "tsv_files"), exis
 if __name__ == '__main__':
     fire.Fire({
         'prepare_bench': prepare_bench,
-        'create_dataset_info': create_dataset_info
     })

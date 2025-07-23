@@ -10,9 +10,6 @@ from copy import deepcopy
 from tqdm import tqdm
 from collections import Counter
 from data_gen.utils import MultipleChoicesRandomizer
-
-import sys
-sys.path.append("./third_party_packages/LLaMA-Factory/src")
 from llamafactory.data.parser import get_dataset_list
 
 
@@ -60,10 +57,10 @@ def initialize_vllm(config, model_path, template_obj, tokenizer):
         "n": config["n"],
         "max_tokens": config["max_tokens"],
         # DO NOT change the following
-        "repetition_penalty": 1.05, 
-        "temperature": 0.7,
-        "top_p": 0.8, 
-        "top_k": -1,
+        "repetition_penalty": config["repetition_penalty"], 
+        "temperature": config["temperature"],
+        "top_p": config["top_p"], 
+        "top_k": config["top_k"],
         "stop_token_ids": template_obj.get_stop_token_ids(tokenizer),
         "skip_special_tokens": False,
     }
@@ -105,7 +102,7 @@ def yield_chunks(dataset, registered_df, template_obj, tokenizer, image_max_pixe
             multi_modal_data = {
                 "image": template_obj.mm_plugin._regularize_images(sample["images"], 
                                                                    image_max_pixels=image_max_pixels, 
-                                                                   image_min_pixels=image_min_pixels)
+                                                                   image_min_pixels=image_min_pixels)["images"]
             }
         else:
             multi_modal_data = None
@@ -141,6 +138,9 @@ def predict_and_eval(
     use_tokenized_dataset: bool = True,
 ):
     
+    from llamafactory.extras.constants import register_custom_data_config
+    register_custom_data_config(str(Path("benchmark_data/benchmark_dataset_info.json").absolute()))
+    
     Path(prediction_dir).mkdir(parents=True, exist_ok=True)
     
     # Initialize dataset
@@ -148,11 +148,11 @@ def predict_and_eval(
     config = {
         "image_max_pixels": 512*512,
         "image_min_pixels": 16*16,
-        "cutoff_len": 2048,
+        "cutoff_len": 8192, 
         # vllm
-        "max_model_len": 16384,
-        "max_tokens": 2048, #1024,
-        "max_num_seqs": 32,
+        "max_model_len": 8192,
+        "max_tokens": 2048,
+        "max_num_seqs": 256,        # NOTE: tune this if you have OOM issues
         # sampling
         "n": n_samples,
         "temperature": temperature,
@@ -188,7 +188,7 @@ def predict_and_eval(
             n_processed_examples += len(df)
             
         
-        json_filename = str(get_dataset_list([single_eval_dataset], "./third_party_packages/LLaMA-Factory/data")[0])
+        json_filename = str(get_dataset_list([single_eval_dataset], os.path.join(os.environ["LLAMAFACTORY_DIR"], "data"))[0])
         registered_df = pd.read_json(json_filename)
                     
         # Run predictions
@@ -236,13 +236,30 @@ def predict_and_eval(
                 pred_df["agg_parsed_predict"] = pred_df["parsed_predict"].apply(lambda x: Counter([i[0] if len(i) > 0 else "" for i in x]).most_common(1)[0][0])
                 pred_df["hit"] = pred_df.apply(compute_mcq_hit, axis=1)
                 
+                # group
+                grouped = pred_df.groupby(["category"])
+                unique_groups = list(grouped.groups.keys())
+
                 print(f"Dataset: {single_eval_dataset}")
-                print("\033[91m" + f"Hit rate: {pred_df['hit'].sum() / len(pred_df)}" + "\033[0m")
+                group_acc = []
+                for group in unique_groups:
+                    group_df = grouped.get_group(group).copy()
+                    acc = group_df["hit"].mean()
+                    group_acc.append(acc)
+                    print(f"\033[92m{group} - Hit rate: {acc:.4f}\033[0m")
+                    
+                print(f"\033[92mOverall Hit rate: {(sum(group_acc) / len(group_acc)):.4f}\033[0m")
+
+                with open(prediction_dir / f"{single_eval_dataset}-evaluation_results.txt", "w") as f:
+                    for _acc, _grp in zip(group_acc, unique_groups):
+                        f.write(f"{single_eval_dataset} - {_grp} Hit rate: {_acc:.4f}\n")
+                    f.write(f"{single_eval_dataset} - Overall Hit rate: {(sum(group_acc) / len(group_acc)):.4f}\n")
+                    
                 pred_df.to_csv(prediction_path.replace(".jsonl", "_parsed.csv"), index=False)
             except Exception as e:
                 print(f"Evaluation error: {e}")
         
-
+        
 answer_pattern = re.compile(r'.*?<answer>\s*(.*?)\s*</answer>', re.DOTALL)
 def extract_predict(examples):
     predictions = []
@@ -259,18 +276,17 @@ def extract_predict(examples):
     
     return predictions
     
-    
+
 def compute_mcq_hit(example):
     
     # Extract letter; example["answer"]: (A)
     parsed_choice_list = MultipleChoicesRandomizer.parse_choice_list("\n".join(example["choices"]))
-    # parsed_choice_list = [(c.split(" ")[0][1], " ".join(c.split(" ")[1:])) for c in example["choices"]]
     parsed_choice_dict = {c[0]: c[1].lower() for c in parsed_choice_list}
     gt_answer_option = example["answer"][1]
     try:
         gt_answer = parsed_choice_dict[gt_answer_option]
     except KeyError:
-        # This is a bug in the dataset
+        # There is bugs in the dataset
         print(f"KeyError: {gt_answer_option} not in {parsed_choice_dict}")
         gt_answer = "XXX"
     

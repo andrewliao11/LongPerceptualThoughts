@@ -1,4 +1,10 @@
+data_gen/caption_datasets/docci/docci_descriptions.jsonlines
+data_gen/caption_datasets/docci/images
+benchmark_data/benchmark_dataset_info.json
+datasets/
+predictions/
 outputs/
+slurm.py
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
