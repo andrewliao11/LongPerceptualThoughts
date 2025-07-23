@@ -166,7 +166,7 @@ def _prepare_cv_bench():
     df["choices"] = df.apply(_parse_cv_bench_choices, axis=1)
     df["index"] = list(range(len(df)))
     df.rename(columns={"task": "category"}, inplace=True)
-    df.drop(columns=["idx", "filename", "target_class", "prompt"], inplace=True)
+    df.drop(columns=["idx", "filename", "target_class", "prompt", "image"], inplace=True)
     df.to_csv(os.path.join(os.environ["BENCHMARK_DATASET_DIR"], "tsv_files", "cv_bench.tsv"), sep="\t")
     
     
