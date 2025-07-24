@@ -10,63 +10,58 @@ A framework for enriching visual reasoning with long chain-of-thoughts. We intro
 ![](./assets/overall_pipeline.gif)
 
 ## News
+- ⭐ 2025/07/xx: Full release (including model weights)
+- ⭐ 2025/07/07: LongPerceptualThoughts is accepted to COLM2025
 - ⭐ 2025/05/26: updated LLaMA-Factory version for DPO training
 - ⭐ 2025/05/23: released train and eval code 
 - ⭐ 2025/05/09: released code for data generation
 - ⭐ 2025/04/21: released paper and dataset
 
 ## Prerequisite
-1. CUDA==11.8
-2. torch==2.5.1
-3. transformers>=4.51.3 (tested on 4.51.3)
-4. xformers==v0.0.27.post2
+1. CUDA==12.4
+2. torch==2.6.0
+3. transformers>=4.51.3 (tested on 4.51.3 and 4.53.2)
+4. vllm==0.8.5
 
 ## 🔧 Usage
 
+This codebase provides you scripts to 
+1. [Synthesize custom LongPerceptualThoughts]()
+2. [Download and evaluate our checkpoints]()
+3. [Train Qwen2.5-VL yourself!]()
+
+
+### Environment
 <details>
 <summary>Conda env setup</summary>
 
 Here is the line-by-line commands to install conda environment:
-<pre><code>conda create -n long_perceptual_thoughts python=3.11 -y
+<pre><code>conda create -n LongPerceptualThoughts python==3.10 -y
 conda install gcc=9 gxx=9 cmake -c conda-forge -y
-conda install pytorch==2.5.1 torchvision==0.20.1 pytorch-cuda=11.8  -c pytorch -c nvidia -y
-pip install git+https://github.com/huggingface/transformers@b1a2de075de86564f7e635f3b31a68b5f33e4cac --no-cache-dir
-conda install -c conda-forge accelerate==0.34.0 peft==0.12.0 trl==0.9.6 -y
-conda install -c conda-forge fire openai pandarallel -y 
-pip install xformers==v0.0.27.post2 --index-url https://download.pytorch.org/whl/cu118 --no-deps
-pip install setuptools_scm tqdm pandas omegaconf datasets==3.1.0
+conda install fire openai pandarallel -c conda-forge -y
+pip install torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cu124
+pip install --no-cache-dir vllm==0.8.5.post1
 
-# only for training
-pip install deepspeed==0.15.4 liger-kernel matplotlib wandb
-
-cd third_party_packages/vllm/
-python use_existing_torch.py
-pip install -e . --no-build-isolation -v
-
-cd ../LLaMA-Factory
+git clone 
+cd LLaMA-Factory/
 pip install -e . --no-build-isolation --no-deps -v
+
+pip install accelerate datasets multiprocess xxhash peft trl omegaconf cachetools --no-deps -v
+conda install pyarrow -c conda-forge -y
 </code></pre>
 
 Alternatively, you can install conda environment using the provided <code>.yml</code> file
-<pre><code>conda create --name long_perceptual_thoughts --file environment.yml
+<pre><code>conda env create -f environment.yml -n LongPerceptualThoughts
 
-pip install xformers==v0.0.27.post2 --index-url https://download.pytorch.org/whl/cu118 --no-deps
-pip install setuptools_scm tqdm pandas omegaconf datasets==3.1.0
-
-# only for training
-pip install deepspeed==0.15.4 liger-kernel matplotlib wandb
-
-cd third_party_packages/vllm/
-python use_existing_torch.py
-pip install -e . --no-build-isolation -v
-
-cd ../LLaMA-Factory
+git clone -b LongPerceptualThoughts https://github.com/andrewliao11/LLaMA-Factory.git
+cd LLaMA-Factory/
 pip install -e . --no-build-isolation --no-deps -v
 </code></pre>
 
 </details>
 
-Note: Both LLaMA-Factory and vllm are actively developed open-source projecets and the code might break when there are version mismatches.
+Note: Both LLaMA-Factory and vllm are actively developed open-source projecets and the code might break when there are version mismatches. We recommend you to start a fresh conda environment.
+
 
 
 ### Data synthesis
@@ -79,21 +74,6 @@ We provide a three-stage data synthesis pipeline using image-caption datasets (e
 The output is a JSON format compatible with LLaMA-Factory.
 For details, see the data generation README at [here](./data_gen/README.md)
 
-```bash
-# Prepare DOCCI or your own dataset first
-# Check the website at https://google.github.io/docci/#downloads
-cd data_gen/caption_datasets/docci
-wget https://storage.googleapis.com/docci/data/docci_descriptions.jsonlines
-wget https://storage.googleapis.com/docci/data/docci_images.tar.gz
-tar -xvf docci_images.tar.gz
-
-cd ../../
-
-export DISABLE_VERSION_CHECK=1
-export PROJECT_ROOT="/PATH/TO/GITHUB/ROOT/"
-export LLAMAFACTORY_DIR="${PROJECT_ROOT}/third_party_packages/LLaMA-Factory"
-bash run_3_stages_test.sh
-```
 
 ### SFT/DPO Training using LLaMA-Factory
 
