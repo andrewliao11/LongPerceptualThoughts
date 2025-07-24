@@ -1,5 +1,6 @@
 import os
 import re
+import gc
 import json
 import torch
 import ast
@@ -22,9 +23,11 @@ from utils import (
     convert_dpo_extended_cot_dataset, 
     keep_one_per_simple_cot_length_weighted_subsample_df, 
     length_weighted_subsample_df, 
-    string_to_seed
+    string_to_seed, 
+    register_to_dataset_json
 )
 
+SUBSAMPLE_RATIO = 1 / 10
 tqdm.pandas()
 
 
@@ -34,21 +37,14 @@ EXPAND_COT_MODEL_NAME = "r1_distilled_32b"
 QWEN2_5_VL_INSTRUCT_PATH = os.environ["QWEN2_5_VL_INSTRUCT_PATH"]
 R1_DISTILLED_QWEN_32_B = os.environ["R1_DISTILLED_QWEN_32_B"]
 
-
-def save_df_in_chunks(df, chunk_size, base_filename="chunk"):
-    num_chunks = math.ceil(len(df) / chunk_size)
-    for i in range(num_chunks):
-        chunk = df.iloc[int(i * chunk_size) : int((i + 1) * chunk_size)]
-        chunk.to_csv(f"{base_filename}_part_{i}.csv", index=False)
         
-        
-def initialize_dataset(config):
+def initialize_dataset(config, simple_cot_dataset_name):
     from transformers import Seq2SeqTrainingArguments
     from llamafactory.data import get_dataset, get_template_and_fix_tokenizer
     from llamafactory.hparams import get_infer_args
     from llamafactory.model import load_tokenizer
 
-    dataset_name = "long_perceptual_thoughts/sft_docci_thought_expansion"
+    # dataset_name = "long_perceptual_thoughts/sft_docci_thought_expansion"
     vllm_config = {
         "gpu_memory_utilization": 0.85,
         "enforce_eager": True,
@@ -59,7 +55,7 @@ def initialize_dataset(config):
         cutoff_len=config["cutoff_len"],
         # DO NOT change the following
         model_name_or_path=R1_DISTILLED_QWEN_32_B,
-        dataset=dataset_name,
+        dataset=simple_cot_dataset_name,
         vllm_config=f"\"{vllm_config_str}\"",
         dataset_dir=os.path.join(os.environ["LLAMAFACTORY_DIR"], "data"),
         template=infer_template(R1_DISTILLED_QWEN_32_B),
@@ -87,10 +83,9 @@ def initialize_vllm(config, template_obj, tokenizer):
         "bad_words": config["bad_words"],
         # DO NOT change the following
         "repetition_penalty": 1.05, 
-        # Following https://huggingface.co/deepseek-ai/DeepSeek-R1-Distill-Qwen-32B/blob/main/generation_config.json
-        "temperature": 0.6,
-        "top_p": 0.95,
-        "top_k": -1, 
+        "temperature": 0.7,
+        "top_p": 0.8,
+        "top_k": 50, 
         "stop_token_ids": template_obj.get_stop_token_ids(tokenizer),
         "skip_special_tokens": False,
     }
@@ -147,10 +142,41 @@ def yield_chunks(dataset, metadata_df, template_obj, tokenizer, chunk_size=50):
     if inputs:
         yield inputs, prompts, labels, metadata
         
+
+def generate_extended_cot(cognitive_phrase, simple_cot_dataset_name):
     
-def generate_extended_cot_chunk(cognitive_phrase, start, end, config, df, dataset_module, llm, sampling_params, tokenizer, template_obj):
+    from llamafactory.extras.constants import register_custom_data_config
+    register_custom_data_config(str(Path("outputs/long_perceptual_thoughts_dataset_info.json").absolute()))
     
-    intermediate_df_path = Path(f"outputs/stage_3_expand_cot/intermediate_df/{SIMPLE_COT_MODEL_NAME}/{EXPAND_COT_MODEL_NAME}/{cognitive_phrase.replace('|', '')}_{start}_{end}.jsonl")
+    
+    simple_cot_output_path = Path(f'outputs/stage_2_simple_cot/{SIMPLE_COT_MODEL_NAME}.csv')
+    df = pd.read_csv(simple_cot_output_path, dtype=str, keep_default_na=False)
+    
+    # Initialize dataset
+    # Only the following config may be changed
+    config = {
+        "cutoff_len": 2048,
+        # vllm
+        "max_model_len": 8192,
+        # sampling
+        "n": 5,
+        "max_tokens": 256,
+        "max_num_seqs": 16, 
+        # chunking
+        "chunk_size": 500, 
+        # bad words
+        "bad_words": BAD_WORDS.split(","),
+    }
+    
+    # Register docci_mcq first
+    model_args, data_args, template_obj, dataset_module, tokenizer = initialize_dataset(config, simple_cot_dataset_name)
+    llm, sampling_params = initialize_vllm(config, template_obj, tokenizer)
+    
+    assert len(df) == len(dataset_module["train_dataset"]), f"Data provided in 'outputs/stage_2_simple_cot/{SIMPLE_COT_MODEL_NAME}.csv' \
+        does not match the dataset size registered as `long_perceptual_thoughts/sft_docci_all_mcqs`."
+    
+    # Generate CoT
+    intermediate_df_path = Path(f"outputs/stage_3_expand_cot/intermediate_df/{SIMPLE_COT_MODEL_NAME}/{EXPAND_COT_MODEL_NAME}/{cognitive_phrase.replace('|', '')}.jsonl")
     intermediate_df_path.parent.mkdir(parents=True, exist_ok=True)
     json.dump(config, open(intermediate_df_path.parent / "config.json", "w"))
     eos_word = tokenizer.special_tokens_map["eos_token"]
@@ -158,11 +184,8 @@ def generate_extended_cot_chunk(cognitive_phrase, start, end, config, df, datase
     n_processed_examples = 0
     if intermediate_df_path.exists():
         n_processed_examples += len(pd.read_json(intermediate_df_path, lines=True))
-    
-    dataset_module = islice(dataset_module["train_dataset"], start + n_processed_examples, end)
-    df = df.iloc[start+n_processed_examples:end]
-    print(f"Generating CoT for examples {start+n_processed_examples} to {end}")
-    
+        
+    dataset_module = islice(dataset_module["train_dataset"], n_processed_examples, None)
     for inputs, prompts, labels, metadata in yield_chunks(
         dataset_module, 
         df, 
@@ -203,37 +226,7 @@ def generate_extended_cot_chunk(cognitive_phrase, start, end, config, df, datase
                 f.write(json.dumps({"prompt": prompt, "predict": pred, "simple_cot": simple_cot, "metadata": meta}, ensure_ascii=False) + "\n")
             
         torch.cuda.empty_cache()
-        
-
-def generate_extended_cot(cognitive_phrase, start=0, end=100):
-    simple_cot_output_path = Path(f'outputs/stage_2_simple_cot/{SIMPLE_COT_MODEL_NAME}.csv')
-    df = pd.read_csv(simple_cot_output_path, dtype=str, keep_default_na=False)
-    
-    # Initialize dataset
-    # Only the following config may be changed
-    config = {
-        "cutoff_len": 2048,
-        # vllm
-        "max_model_len": 8192,
-        # sampling
-        "n": 3,
-        "max_tokens": 256,
-        "max_num_seqs": 16, 
-        # chunking
-        "chunk_size": 500, 
-        # bad words
-        "bad_words": BAD_WORDS.split(","),
-    }
-    
-    # Register docci_mcq first
-    model_args, data_args, template_obj, dataset_module, tokenizer = initialize_dataset(config)
-    llm, sampling_params = initialize_vllm(config, template_obj, tokenizer)
-    
-    assert len(df) == len(dataset_module["train_dataset"]), f"Data provided in 'outputs/stage_2_simple_cot/{SIMPLE_COT_MODEL_NAME}.csv' \
-        does not match the dataset size registered as `long_perceptual_thoughts/sft_docci_all_mcqs`."
-    
-    # Generate CoT
-    generate_extended_cot_chunk(cognitive_phrase, start, end, config, df, dataset_module, llm, sampling_params, tokenizer, template_obj)
+        gc.collect()
     
 
 think_answer_pattern = re.compile(r'<think>\s*(.*?)\s*</think>.*?<answer>\s*(.*?)\s*</answer>', re.DOTALL)
@@ -288,7 +281,7 @@ def extract_thought_and_answer(example):
     return res
 
 
-def collect_extended_cot():
+def collect_extended_cot(dataset_tag, preprocess_filter_inconsistency=False):
     
     from pandarallel import pandarallel
     pandarallel.initialize(progress_bar=True)
@@ -298,18 +291,18 @@ def collect_extended_cot():
     df["mcq_messages"] = df["mcq_messages"].parallel_apply(ast.literal_eval)
     
     # Collect all intermediate files
-    expand_cot_config = json.load(open(Path(f"outputs/stage_3_expand_cot/intermediate_df/{SIMPLE_COT_MODEL_NAME}/{EXPAND_COT_MODEL_NAME}/config.json")))
-    
     intermediate_df_paths = Path(f"outputs/stage_3_expand_cot/intermediate_df/{SIMPLE_COT_MODEL_NAME}/{EXPAND_COT_MODEL_NAME}").glob("*.jsonl")
     intermediate_df_list = []
     for p in tqdm(intermediate_df_paths, desc="Loading intermediate files"):
         _df = pd.read_json(p, lines=True)
-        _df["cognitive_phrase"] = p.stem.split("_")[0]
+        _df["cognitive_phrase"] = p.stem #.split("_")[0]
         # NOTE: Only include "Wait," and "Let's double-check the details." as cognitive phrases now
         # if any([w in p.stem.split("_")[0] for w in ["Wait,", "Let's double-check the details."]]):
         intermediate_df_list.append(_df)
         
     intermediate_df = pd.concat(intermediate_df_list, ignore_index=True)
+    
+    
     intermediate_df["mcq_unique_id"] = intermediate_df["metadata"].apply(lambda x: x["metadata"]["mcq_unique_id"])
     # NOTE: A bit of inconsistent naming here. We'll fix it later
     intermediate_df["simple_cot_unique_id"] = intermediate_df["metadata"].apply(lambda x: x["simple_cot_unique_id"])
@@ -345,6 +338,8 @@ def collect_extended_cot():
     print(f"Filtered out {prev_n - len(exploded_df)} duplicates.")
     
     exploded_df["extended_cot_unique_id"] = exploded_df["_expand_cot_raw_response"].apply(get_unique_id)
+    exploded_df["extended_cot_parsed_correct"] = exploded_df["extended_cot_parsed_correct"].astype(bool)
+    exploded_df["simple_cot_parsed_correct"] = exploded_df["simple_cot_parsed_correct"].astype(bool)
     
     print(f"Collected {len(exploded_df)} examples.")
     print(f"#Unique images: {len(exploded_df['image_id'].unique())}")
@@ -352,9 +347,81 @@ def collect_extended_cot():
     print(f"#Unique Simple CoTs: {len(exploded_df['simple_cot_unique_id'].unique())}")
     print(f"Overall Accuracy: {exploded_df['extended_cot_parsed_correct'].mean():.3f}")
 
-    save_df_in_chunks(exploded_df, chunk_size=5e5, base_filename=f"outputs/stage_3_expand_cot/{SIMPLE_COT_MODEL_NAME}-{EXPAND_COT_MODEL_NAME}")
+    exploded_df.to_csv(f"outputs/stage_3_expand_cot/{SIMPLE_COT_MODEL_NAME}-{EXPAND_COT_MODEL_NAME}.csv", index=False)
     
+    # Create SFT and DPO dataset
+    df = exploded_df
+    
+    if preprocess_filter_inconsistency:
+        print("This will use additional API calls to filter out inconsistent thoughts and answers.")
+        print("Please make sure you have enough quota.")
+    
+    from transformers import AutoTokenizer
+    tokenizer = AutoTokenizer.from_pretrained(QWEN2_5_VL_INSTRUCT_PATH)
+    
+    preprocess_tag = ""
+    if preprocess_filter_inconsistency:
+        preprocess_tag = f"{preprocess_tag}_filter_inconsistency"
 
+
+    # SFT dataset
+    O_df = df[df["simple_cot_parsed_correct"]].drop_duplicates(subset=["simple_cot_unique_id"], keep='first')
+    O_df["extended_cot_parsed_thought"] = O_df["simple_cot_parsed_thought"]
+    O_df["extended_cot_parsed_answer"] = O_df["simple_cot_parsed_answer"]
+    O_df["extended_cot_parsed_correct"] = O_df["simple_cot_parsed_correct"]
+    O_df["extended_cot_unique_id"] = O_df["simple_cot_unique_id"]
+    
+    O_O_df = df[df["extended_cot_parsed_correct"] & df["simple_cot_parsed_correct"]]
+    O_O_df["added_thought"] = O_O_df.apply(lambda x: x["extended_cot_parsed_thought"].replace(x["simple_cot_parsed_thought"], ""), axis=1)
+    
+    X_O_df = df[df["extended_cot_parsed_correct"] & ~df["simple_cot_parsed_correct"]]
+    X_O_df["added_thought"] = X_O_df.apply(lambda x: x["extended_cot_parsed_thought"].replace(x["simple_cot_parsed_thought"], ""), axis=1)
+    
+    sft_df = _create_sft(None, O_df, O_O_df, X_O_df, "all", preprocess_filter_inconsistency)
+    convert_sft_extended_cot_dataset(sft_df, None, f"outputs/sft_docci_{dataset_tag}_extended_cots.json") 
+    
+    register_to_dataset_json({
+        f"long_perceptual_thoughts_stage_3/{dataset_tag}": str(Path(f"outputs/sft_docci_{dataset_tag}_extended_cots.json").absolute())
+    }, contain_image=True)
+    
+    # DPO dataset
+    if preprocess_filter_inconsistency:
+        # Filter X -> O
+        X_O_df = df[df["extended_cot_parsed_correct"] & ~df["simple_cot_parsed_correct"]]
+        rest_df = df[df["simple_cot_parsed_correct"] | (~df["extended_cot_parsed_correct"] & ~df["simple_cot_parsed_correct"])]
+        p_negative = Path("outputs/stage_3_expand_cot/inconsistent_thought_and_answer.csv")
+        p_positive = Path("outputs/stage_3_expand_cot/consistent_thought_and_answer.csv")
+        assert p_negative.exists() and p_positive.exists(), f"Please run `filter_inconsistent_thought_and_answer` first."
+        inconsistent_thought_and_answer = pd.read_csv(str(p_negative))
+        consistent_thought_and_answer = pd.read_csv(str(p_positive))
+        consistent_thought_and_answer["valid"] = True
+        X_O_df = X_O_df.merge(consistent_thought_and_answer, on="extended_cot_unique_id", how="left")
+        X_O_df = X_O_df[X_O_df["valid"] == True]
+        X_O_df.drop(columns=["valid"], inplace=True)
+        
+        df = pd.concat([X_O_df, rest_df], ignore_index=True)
+    
+    
+    _, dpo_O_better_than_O_X_df, dpo_X_O_better_than_X_and_any_other_df, dpo_O_better_than_X_and_any_other_df = _create_dpo_dataset(df)
+
+    # remove redundancy
+    dpo_O_better_than_O_X_df.sample(frac=1., random_state=42).reset_index(drop=True)
+    dpo_O_better_than_X_and_any_other_df.sample(frac=1., random_state=42).reset_index(drop=True)
+    dpo_X_O_better_than_X_and_any_other_df.sample(frac=1., random_state=42).reset_index(drop=True)
+    
+    dpo_O = pd.concat([dpo_O_better_than_O_X_df, dpo_O_better_than_X_and_any_other_df], ignore_index=True)
+    dpo_O.drop_duplicates(subset=["positive"], keep='first', inplace=True)
+    
+    dpo_X_O_better_than_X_and_any_other_df.drop_duplicates(subset=["positive"], keep='first', inplace=True)
+    dpo_X_O_better_than_X_and_any_other_df.drop_duplicates(subset=["negative"], keep='first', inplace=True)
+    dpo_X_O = dpo_X_O_better_than_X_and_any_other_df
+
+    print(f"Collected {len(dpo_O)} DPO examples for O")
+    print(f"Collected {len(dpo_X_O)} DPO examples for X O")
+    convert_dpo_extended_cot_dataset(dpo_O, None, f"outputs/dpo_docci_{dataset_tag}_extended_cots_O.json")
+    convert_dpo_extended_cot_dataset(dpo_X_O, None, f"outputs/dpo_docci_{dataset_tag}_extended_cots_X_O.json")
+    
+    
 def _create_dpo_dataset(df):
     
     simple_cot_keys = ["simple_cot_parsed_thought", "simple_cot_parsed_answer", "simple_cot_parsed_correct"]
@@ -366,6 +433,7 @@ def _create_dpo_dataset(df):
     
     grouped = df.groupby(["simple_cot_unique_id"])
     unique_groups = grouped.groups.keys()
+    
     for group in tqdm(unique_groups, desc="Processing groups for DPO data"):
         group_df = grouped.get_group(group).copy()
         
@@ -377,6 +445,7 @@ def _create_dpo_dataset(df):
         simple_cot_data = group_df[simple_cot_keys].iloc[0]
         extended_cot_data = group_df[extended_cot_keys]
         correct_extended_cot_data = extended_cot_data[extended_cot_data["extended_cot_parsed_correct"]]
+        
         wrong_extended_cot_data = extended_cot_data[~extended_cot_data["extended_cot_parsed_correct"]]
         
         if simple_cot_data["simple_cot_parsed_correct"]:
@@ -419,7 +488,7 @@ def _create_dpo_dataset(df):
                 "positive": (d1["extended_cot_parsed_thought"], d1["extended_cot_parsed_answer"]),
                 "negative": (simple_cot_data["simple_cot_parsed_thought"], simple_cot_data["simple_cot_parsed_answer"])
             } for _, d1 in correct_extended_cot_data.iterrows()])
-           
+    
     
     dpo_O_better_than_X_and_any_other = []              # Correctness
     
@@ -471,55 +540,6 @@ def _create_dpo_dataset(df):
     print(f"Collected {len(dpo_O_better_than_X_and_any_other_df)} DPO examples for O > X or X X.")
     return dpo_O_better_than_O_O_df, dpo_O_better_than_O_X_df, dpo_X_O_better_than_X_and_any_other_df, dpo_O_better_than_X_and_any_other_df
 
-
-def encode_list_of_string(list_of_string, tokenizer):
-    batch_size = int(1e4)
-    num_tokens = []
-    for i in tqdm(range(0, len(list_of_string), batch_size), desc="Batch encoding"):
-        batch = list_of_string.iloc[i:i+batch_size]
-        encodings = tokenizer(text=batch.tolist())
-        num_tokens.extend([len(inp) for inp in encodings.input_ids])
-    return num_tokens
-
-
-def compute_mcq_hit(example, predict_key):
-    parsed_choice_list = MultipleChoicesRandomizer.parse_choice_list(example["prompt"].split("<|im_end|>\n")[1])
-    parsed_choice_list = [(c[0], c[1].lower()) for c in parsed_choice_list]
-    parsed_choice_dict = {c[0]: c[1].lower() for c in parsed_choice_list}
-    
-    gt_answer = str(example["mcq_answer"]).lower()
-    gt_answer_option = [c[0] for c in parsed_choice_list if c[1] == gt_answer][0]
-    
-    hit_list = []
-    for predict in example[predict_key]:
-        if "Answer:" in predict:
-            predict = predict.split("Answer:")[1].strip()
-            
-        agg_parsed_predict = predict
-        
-        hit = False
-        if agg_parsed_predict.lower() in parsed_choice_dict.values():
-            # Answer is shown in text
-            hit = True
-        else:
-            # Answer is show in options
-            if agg_parsed_predict == gt_answer_option:
-                # Possible answer: A
-                hit = True
-            elif agg_parsed_predict in [f.format(gt_answer_option) for f in MultipleChoicesRandomizer.answer_formats]:
-                # Possible answer: (A), A.
-                hit = True
-            elif agg_parsed_predict.lower() in [f.format(gt_answer_option, gt_answer) for f in MultipleChoicesRandomizer.choice_formats]:
-                # Possible answer: (A) text, A. text
-                hit = True
-            elif agg_parsed_predict.split(" ")[0] in [f.format(gt_answer_option) for f in MultipleChoicesRandomizer.answer_formats]:
-                # Possible answer: (A) XXXXX, A. XXXXX
-                hit = True
-        
-        hit_list.append(hit)    
-        
-    return hit_list
-     
 
 def filter_inconsistent_thought_and_answer(df):
     
@@ -592,8 +612,7 @@ def _create_sft(image_list, O_df, O_O_df, X_O_df, image_list_tag, preprocess_fil
         sampled_O_df = O_df
         sampled_O_O_df = O_O_df
         sampled_X_O_df = X_O_df
-        
-    SUBSAMPLE_RATIO = 1 / 10
+
             
     sampled_O_any_df = pd.concat([sampled_O_df, sampled_O_O_df], ignore_index=True)
     sampled_O_any_df.sample(frac=1., random_state=42).reset_index(drop=True)
@@ -630,94 +649,8 @@ def _create_sft(image_list, O_df, O_O_df, X_O_df, image_list_tag, preprocess_fil
         consistent_thought_and_answer.to_csv(str(p_positive), index=False)
 
     combined_df = pd.concat([sampled_X_O_df, sampled_O_any_df], ignore_index=True)
+    
     print(f"Size of O any: {len(sampled_O_any_df)}")
     print(f"Size of X O: {len(sampled_X_O_df)}")
-    convert_sft_extended_cot_dataset(combined_df, None, f"outputs/sft_docci_{image_list_tag}_extended_cots.json") 
-        
-
-def create_sft_dpo_dataset(dataset_type, preprocess_filter_inconsistency=False):
-    if preprocess_filter_inconsistency:
-        print("This will use additional API calls to filter out inconsistent thoughts and answers.")
-        print("Please make sure you have enough quota.")
-        
-    from pandarallel import pandarallel
-    pandarallel.initialize(progress_bar=True)
-    from transformers import AutoTokenizer
-    tokenizer = AutoTokenizer.from_pretrained(QWEN2_5_VL_INSTRUCT_PATH)
+    return combined_df
     
-    preprocess_tag = ""
-    df_list = []
-    for p in tqdm(Path(f"outputs/stage_3_expand_cot").glob(f"{SIMPLE_COT_MODEL_NAME}-{EXPAND_COT_MODEL_NAME}_part_*.csv"), desc="Loading chunks"):
-        df_list.append(pd.read_csv(str(p)))
-    
-    df = pd.concat(df_list, ignore_index=True)
-    # df["#tokens of extended_cot_parsed_thought"] = encode_list_of_string(df["extended_cot_parsed_thought"], tokenizer)
-    df["mcq_messages"] = df["mcq_messages"].progress_apply(ast.literal_eval)
-    
-    if preprocess_filter_inconsistency:
-        preprocess_tag = f"{preprocess_tag}_filter_inconsistency"
-
-    # Create DPO dataset
-    if dataset_type == "DPO":
-        if preprocess_filter_inconsistency:
-            # Filter X -> O
-            X_O_df = df[df["extended_cot_parsed_correct"] & ~df["simple_cot_parsed_correct"]]
-            rest_df = df[df["simple_cot_parsed_correct"] | (~df["extended_cot_parsed_correct"] & ~df["simple_cot_parsed_correct"])]
-            p_negative = Path("outputs/stage_3_expand_cot/inconsistent_thought_and_answer.csv")
-            p_positive = Path("outputs/stage_3_expand_cot/consistent_thought_and_answer.csv")
-            assert p_negative.exists() and p_positive.exists(), f"Please run `filter_inconsistent_thought_and_answer` first."
-            inconsistent_thought_and_answer = pd.read_csv(str(p_negative))
-            consistent_thought_and_answer = pd.read_csv(str(p_positive))
-            consistent_thought_and_answer["valid"] = True
-            X_O_df = X_O_df.merge(consistent_thought_and_answer, on="extended_cot_unique_id", how="left")
-            X_O_df = X_O_df[X_O_df["valid"] == True]
-            X_O_df.drop(columns=["valid"], inplace=True)
-            
-            df = pd.concat([X_O_df, rest_df], ignore_index=True)
-        
-        
-        _, dpo_O_better_than_O_X_df, dpo_X_O_better_than_X_and_any_other_df, dpo_O_better_than_X_and_any_other_df = _create_dpo_dataset(df)
-
-        # remove redundancy
-        dpo_O_better_than_O_X_df.sample(frac=1., random_state=42).reset_index(drop=True)
-        dpo_O_better_than_X_and_any_other_df.sample(frac=1., random_state=42).reset_index(drop=True)
-        dpo_X_O_better_than_X_and_any_other_df.sample(frac=1., random_state=42).reset_index(drop=True)
-        
-        dpo_O = pd.concat([dpo_O_better_than_O_X_df, dpo_O_better_than_X_and_any_other_df], ignore_index=True)
-        dpo_O.drop_duplicates(subset=["positive"], keep='first', inplace=True)
-        
-        dpo_X_O_better_than_X_and_any_other_df.drop_duplicates(subset=["positive"], keep='first', inplace=True)
-        dpo_X_O_better_than_X_and_any_other_df.drop_duplicates(subset=["negative"], keep='first', inplace=True)
-        dpo_X_O = dpo_X_O_better_than_X_and_any_other_df
-
-        print(f"Collected {len(dpo_O)} DPO examples for O")
-        print(f"Collected {len(dpo_X_O)} DPO examples for X O")
-        for image_list_tag in ["500_images", "1000_images", "2000_images", "4000_images"]:
-            if (Path("outputs") / f"docci_{image_list_tag}.json").exists():
-                convert_dpo_extended_cot_dataset(dpo_O, image_list, f"outputs/dpo_docci_{image_list_tag}_extended_cots_O.json")
-                convert_dpo_extended_cot_dataset(dpo_X_O, image_list, f"outputs/dpo_docci_{image_list_tag}_extended_cots_X_O.json")
-        
-        convert_dpo_extended_cot_dataset(dpo_O, None, "outputs/dpo_docci_all_extended_cots_O.json")
-        convert_dpo_extended_cot_dataset(dpo_X_O, None, "outputs/dpo_docci_all_extended_cots_X_O.json")
-        
-    elif dataset_type == "SFT":
-        
-        O_df = df[df["simple_cot_parsed_correct"]].drop_duplicates(subset=["simple_cot_unique_id"], keep='first')
-        O_df["extended_cot_parsed_thought"] = O_df["simple_cot_parsed_thought"]
-        O_df["extended_cot_parsed_answer"] = O_df["simple_cot_parsed_answer"]
-        O_df["extended_cot_parsed_correct"] = O_df["simple_cot_parsed_correct"]
-        O_df["extended_cot_unique_id"] = O_df["simple_cot_unique_id"]
-        
-        O_O_df = df[df["extended_cot_parsed_correct"] & df["simple_cot_parsed_correct"]]
-        O_O_df["added_thought"] = O_O_df.apply(lambda x: x["extended_cot_parsed_thought"].replace(x["simple_cot_parsed_thought"], ""), axis=1)
-        
-        X_O_df = df[df["extended_cot_parsed_correct"] & ~df["simple_cot_parsed_correct"]]
-        X_O_df["added_thought"] = X_O_df.apply(lambda x: x["extended_cot_parsed_thought"].replace(x["simple_cot_parsed_thought"], ""), axis=1)
-        
-        for image_list_tag in ["500_images", "1000_images", "2000_images", "4000_images"]:
-            if (Path("outputs") / f"docci_{image_list_tag}.json").exists():
-                image_list = json.load(open(Path("outputs") / f"docci_{image_list_tag}.json"))
-                _create_sft(image_list, O_df, O_O_df, X_O_df, image_list_tag, preprocess_filter_inconsistency)
-                
-        _create_sft(None, O_df, O_O_df, X_O_df, "all", preprocess_filter_inconsistency)
-                

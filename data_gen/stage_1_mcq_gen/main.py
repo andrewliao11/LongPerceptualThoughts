@@ -8,7 +8,8 @@ from pathlib import Path
 from collections import Counter
 from datetime import datetime
 from jinja2.sandbox import SandboxedEnvironment
-from utils import OpenAICacheClient, get_unique_id, convert_sft_mcq_dataset, DOCCI, MultipleChoicesRandomizer
+from utils import OpenAICacheClient, get_unique_id, convert_sft_mcq_dataset, DOCCI, MultipleChoicesRandomizer, register_to_dataset_json
+
 
 from tqdm import tqdm
 tqdm.pandas()
@@ -94,17 +95,14 @@ def generate_mcq_from_captions(max_examples=1000, verbose=False):
     dataset.df.to_csv('outputs/docci_mcq.csv', index=False)
     
     # Create MCQs
-    for subset_size in [500, 1000, 2000, 4000, -1]:
-        if subset_size < 0:
-            tag = "all"
-            sampled_df = dataset.df
-        elif len(image_id_list) > subset_size:
-            tag = f"{subset_size}_images"
-            json.dump(image_id_list[:subset_size], open(f'outputs/docci_{tag}.json', 'w'))
-            sampled_df = dataset.df[dataset.df.apply(lambda x: x["image_id"] in image_id_list[:subset_size], axis=1)]
-            
-        else:
-            continue
+    dataset_info = {}
+    tag = f"{len(image_id_list)}_images"
+    convert_sft_mcq_dataset(dataset.df, f"outputs/sft_docci_{tag}_mcqs.json")
+    convert_sft_mcq_dataset(dataset.df, f"outputs/sft_direct_answer_docci_{tag}_mcqs.json", direct_answer=True)
+    
+    dataset_info[f"long_perceptual_thoughts_stage_1/{tag}"] = str(Path(f"outputs/sft_docci_{tag}_mcqs.json").absolute())
+    dataset_info[f"long_perceptual_thoughts_stage_1_direct_answer/{tag}"] = str(Path(f"outputs/sft_direct_answer_docci_{tag}_mcqs.json").absolute())
+    
+    # Register to a json file so that llama-factory could see it
+    register_to_dataset_json(dataset_info)
         
-        convert_sft_mcq_dataset(sampled_df, f"outputs/sft_docci_{tag}_mcqs.json")
-        convert_sft_mcq_dataset(sampled_df, f"outputs/sft_direct_answer_docci_{tag}_mcqs.json", direct_answer=True)

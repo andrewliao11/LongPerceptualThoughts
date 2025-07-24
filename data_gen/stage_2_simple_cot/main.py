@@ -1,5 +1,6 @@
 import os
 import re
+import gc
 import json
 import torch
 import pandas as pd
@@ -14,24 +15,20 @@ from utils import (
     convert_sft_simple_cot_dataset, 
     convert_sft_thought_expansion_dataset, 
     extract_options_from_user_prompt, 
-    get_unique_id
+    get_unique_id, 
+    register_to_dataset_json
 )
-
-import sys
-sys.path.append(os.path.join(os.environ["LLAMAFACTORY_DIR"], "src"))
-
 
 MODEL_NAME = "qwen2.5_vl_instruct"
 QWEN2_5_VL_INSTRUCT_PATH = os.environ["QWEN2_5_VL_INSTRUCT_PATH"]
+SAMPLE_RATIO = 1 / 3.75
 
-
-def initialize_dataset(config):
+def initialize_dataset(config, mcq_dataset_name):
     from transformers import Seq2SeqTrainingArguments
     from llamafactory.data import get_dataset, get_template_and_fix_tokenizer
     from llamafactory.hparams import get_infer_args
     from llamafactory.model import load_tokenizer
 
-    dataset_name = "long_perceptual_thoughts/sft_docci_all_mcqs"
     vllm_config = {
         "gpu_memory_utilization": 0.85,
         "enforce_eager": True,
@@ -44,14 +41,13 @@ def initialize_dataset(config):
         cutoff_len=config["cutoff_len"],
         # DO NOT change the following
         model_name_or_path=QWEN2_5_VL_INSTRUCT_PATH,
-        dataset=dataset_name,
+        dataset=mcq_dataset_name,
         vllm_config=f"\"{vllm_config_str}\"",
         dataset_dir=os.path.join(os.environ["LLAMAFACTORY_DIR"], "data"),
         template=infer_template(QWEN2_5_VL_INSTRUCT_PATH),
         preprocessing_num_workers=8,
         infer_dtype="half",
         trust_remote_code=True,
-        # tokenized_path="outputs/tokenized_path/" + dataset_name
     ))
     training_args = Seq2SeqTrainingArguments(output_dir="dummy_dir")
     tokenizer_module = load_tokenizer(model_args)
@@ -114,7 +110,7 @@ def yield_chunks(dataset, metadata_df, template_obj, tokenizer, image_max_pixels
             multi_modal_data = {
                 "image": template_obj.mm_plugin._regularize_images(sample["images"], 
                                                                    image_max_pixels=image_max_pixels, 
-                                                                   image_min_pixels=image_min_pixels)
+                                                                   image_min_pixels=image_min_pixels)["images"]
             }
         else:
             multi_modal_data = None
@@ -137,22 +133,50 @@ def yield_chunks(dataset, metadata_df, template_obj, tokenizer, image_max_pixels
     if inputs:
         yield inputs, prompts, labels, metadata
         
+
+def generate_simple_cot(mcq_dataset_name):
     
-def generate_simple_cot_chunk(start, end, config, df, dataset_module, llm, sampling_params, tokenizer, template_obj):
+    from llamafactory.extras.constants import register_custom_data_config
+    register_custom_data_config(str(Path("outputs/long_perceptual_thoughts_dataset_info.json").absolute()))
     
-    intermediate_df_path = Path(f"outputs/stage_2_simple_cot/intermediate_df/{MODEL_NAME}/{start}_{end}.jsonl")
+    
+    mcq_gen_output_path = Path('outputs/docci_mcq.csv')
+    df = pd.read_csv(mcq_gen_output_path, dtype=str, keep_default_na=False)
+    
+    # Initialize dataset
+    # Only the following config may be changed
+    config = {
+        "image_max_pixels": 512 * 512,
+        "image_min_pixels": 16 * 16,
+        "cutoff_len": 1024,
+        # vllm
+        "max_model_len": 16384,
+        # sampling
+        "n": 10,
+        "max_tokens": 1024,
+        "max_num_seqs": 32,
+        # chunking
+        "chunk_size": 500
+    }
+    
+    # Register docci_mcq first
+    model_args, data_args, template_obj, dataset_module, tokenizer = initialize_dataset(config, mcq_dataset_name)
+    llm, sampling_params = initialize_vllm(config, template_obj, tokenizer)
+    
+    assert len(df) == len(dataset_module["train_dataset"]), f"Data provided in 'outputs/docci_mcq.csv' \
+        does not match the dataset size registered as `long_perceptual_thoughts/sft_docci_all_mcqs`."
+    
+    # Generate CoT
+    intermediate_df_path = Path(f"outputs/stage_2_simple_cot/intermediate_df/{MODEL_NAME}.jsonl")
     intermediate_df_path.parent.mkdir(parents=True, exist_ok=True)
     json.dump(config, open(intermediate_df_path.parent / "config.json", "w"))
     thinking_bos_token = tokenizer.encode("<think>")
-    
     
     n_processed_examples = 0
     if intermediate_df_path.exists():
         n_processed_examples += len(pd.read_json(intermediate_df_path, lines=True))
     
-    dataset_module = islice(dataset_module["train_dataset"], start + n_processed_examples, end)
-    df = df.iloc[start+n_processed_examples:end]
-    print(f"Generating CoT for examples {start+n_processed_examples} to {end}")
+    dataset_module = islice(dataset_module["train_dataset"], n_processed_examples, None)
     
     for inputs, prompts, labels, metadata in yield_chunks(
         dataset_module, 
@@ -179,38 +203,8 @@ def generate_simple_cot_chunk(start, end, config, df, dataset_module, llm, sampl
                 f.write(json.dumps({"prompt": prompt, "predict": pred, "label": label, "metadata": meta}, ensure_ascii=False) + "\n")
             
         torch.cuda.empty_cache()
+        gc.collect()
         
-
-def generate_simple_cot(start=0, end=100):
-    mcq_gen_output_path = Path('outputs/docci_mcq.csv')
-    df = pd.read_csv(mcq_gen_output_path, dtype=str, keep_default_na=False)
-    
-    # Initialize dataset
-    # Only the following config may be changed
-    config = {
-        "image_max_pixels": 512 * 512,
-        "image_min_pixels": 16 * 16,
-        "cutoff_len": 1024,
-        # vllm
-        "max_model_len": 16384,
-        # sampling
-        "n": 10,
-        "max_tokens": 1024,
-        "max_num_seqs": 32,
-        # chunking
-        "chunk_size": 500
-    }
-    
-    # Register docci_mcq first
-    model_args, data_args, template_obj, dataset_module, tokenizer = initialize_dataset(config)
-    llm, sampling_params = initialize_vllm(config, template_obj, tokenizer)
-    
-    assert len(df) == len(dataset_module["train_dataset"]), f"Data provided in 'outputs/docci_mcq.csv' \
-        does not match the dataset size registered as `long_perceptual_thoughts/sft_docci_all_mcqs`."
-    
-    # Generate CoT
-    generate_simple_cot_chunk(start, end, config, df, dataset_module, llm, sampling_params, tokenizer, template_obj)
-    
 
 think_answer_pattern = re.compile(r'<think>\s*(.*?)\s*</think>.*?<answer>\s*(.*?)\s*</answer>', re.DOTALL)
 def extract_thought_and_answer(example):
@@ -263,29 +257,28 @@ def extract_thought_and_answer(example):
     return res
 
     
-def collect_simple_cot():
+def collect_simple_cot(mcq_dataset_name, dataset_tag):
     
     from pandarallel import pandarallel
     pandarallel.initialize(progress_bar=True)
+    
+    from llamafactory.extras.constants import register_custom_data_config
+    register_custom_data_config(str(Path("outputs/long_perceptual_thoughts_dataset_info.json").absolute()))
 
     mcq_gen_output_path = Path('outputs/docci_mcq.csv')
     df = pd.read_csv(mcq_gen_output_path, dtype=str, keep_default_na=False)
     
-    dataset_name = "long_perceptual_thoughts/sft_docci_all_mcqs"
     from llamafactory.data.parser import get_dataset_list
-    json_filename = str(get_dataset_list([dataset_name], os.path.join(os.environ["LLAMAFACTORY_DIR"], "data"))[0])
+    json_filename = str(get_dataset_list([mcq_dataset_name], os.path.join(os.environ["LLAMAFACTORY_DIR"], "data"))[0])
     registered_df = pd.read_json(json_filename)
     registered_df["mcq_unique_id"] = registered_df["metadata"].apply(lambda x: x["mcq_unique_id"])
     registered_df.drop(columns=["metadata", "images"], inplace=True)
     registered_df.rename(columns={"messages": "mcq_messages"}, inplace=True)
     df = pd.merge(df, registered_df, on='mcq_unique_id')
     
-    # Collect all intermediate files
-    simple_cot_config = json.load(open(Path(f"outputs/stage_2_simple_cot/intermediate_df/{MODEL_NAME}/config.json")))
-    
-    intermediate_df_paths = Path(f"outputs/stage_2_simple_cot/intermediate_df/{MODEL_NAME}").glob("*.jsonl")
-    intermediate_df_list = [pd.read_json(p, lines=True) for p in intermediate_df_paths]
-    intermediate_df = pd.concat(intermediate_df_list, ignore_index=True)
+    # Collect intermediate file
+    intermediate_df_path = Path(f"outputs/stage_2_simple_cot/intermediate_df/{MODEL_NAME}.jsonl")
+    intermediate_df = pd.read_json(intermediate_df_path, lines=True)
     intermediate_df["mcq_unique_id"] = intermediate_df["metadata"].apply(lambda x: x["metadata"]["mcq_unique_id"])
     intermediate_df.drop(columns=["metadata", "label"], inplace=True)
     intermediate_df.rename(columns={
@@ -312,16 +305,21 @@ def collect_simple_cot():
     print(f"#Unique Images: {len(exploded_df['image_id'].unique())}")
     print(f"#Unique MCQs: {len(exploded_df['mcq_unique_id'].unique())}")
     
-    
-    SAMPLE_RATIO = 1 / 3.75
-    correct_df = exploded_df[exploded_df["simple_cot_parsed_correct"] == True]
-    for tag in ["500_images", "1000_images", "2000_images", "4000_images"]:
-        if Path(f"outputs/docci_{tag}.json").exists():
-            image_list = json.load(open(f"outputs/docci_{tag}.json"))
-            convert_sft_simple_cot_dataset(correct_df, image_list, f"outputs/sft_docci_{tag}_simple_cots_weighted_sample.json", weighted_sample=True, sample_ratio=SAMPLE_RATIO)
-            
-    convert_sft_simple_cot_dataset(correct_df, None, f"outputs/sft_docci_all_simple_cots_weighted_sample.json", weighted_sample=True, sample_ratio=SAMPLE_RATIO)
-    
-    # Create for thought-expansion
     exploded_df.to_csv(Path(f"outputs/stage_2_simple_cot/{MODEL_NAME}.csv"), index=False)
-    convert_sft_thought_expansion_dataset(exploded_df, "outputs/sft_docci_thought_expansion.json")
+    
+    correct_df = exploded_df[exploded_df["simple_cot_parsed_correct"] == True]
+    
+    # Create MCQs
+    convert_sft_simple_cot_dataset(correct_df, None, f"outputs/sft_docci_{dataset_tag}_simple_cots.json", weighted_sample=True, sample_ratio=SAMPLE_RATIO)
+    # Create for thought-expansion for stage 3
+    convert_sft_thought_expansion_dataset(exploded_df, f"outputs/sft_docci_{dataset_tag}_thought_expansion.json")
+    
+    register_to_dataset_json({
+        f"long_perceptual_thoughts_stage_2/{dataset_tag}": str(Path(f"outputs/sft_docci_{dataset_tag}_simple_cots.json").absolute())
+        }, contain_image=True)
+    
+    
+    register_to_dataset_json({
+        f"long_perceptual_thoughts_stage_2_thought_expansion/{dataset_tag}": str(Path(f"outputs/sft_docci_{dataset_tag}_thought_expansion.json").absolute())
+        }, contain_image=False)
+    

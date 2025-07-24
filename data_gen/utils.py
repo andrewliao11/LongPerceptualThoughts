@@ -51,6 +51,40 @@ class DOCCI:
         self.image_dir = DOCCI_DATASET_ROOT / "images"
 
 
+def register_to_dataset_json(dataset_info, contain_image=True):
+    path = os.path.join("outputs", "long_perceptual_thoughts_dataset_info.json")
+    prev_dataset_info = {}
+    if os.path.exists(path):
+        prev_dataset_info = json.load(open(path))
+        
+    for k, v in dataset_info.items():
+        prev_dataset_info[k] = get_sharegpt_template(path=v, contain_image=contain_image)
+        
+    json.dump(prev_dataset_info, open(path, 'w'), indent=4)
+    
+    
+def get_sharegpt_template(path, contain_image):
+    
+    data = {
+        "file_name": path,
+        "formatting": "sharegpt",
+        "columns": {
+            "messages": "messages", 
+        },
+        "tags": {
+            "role_tag": "role",
+            "content_tag": "content",
+            "user_tag": "user",
+            "assistant_tag": "assistant", 
+            "system_tag": "system"
+        }
+    }
+    if contain_image:
+        data["columns"]["images"] = "images"
+        
+    return data
+    
+    
 def infer_template(model_name_or_path):
     if "DeepSeek-R1" in model_name_or_path:
         return "deepseek3"

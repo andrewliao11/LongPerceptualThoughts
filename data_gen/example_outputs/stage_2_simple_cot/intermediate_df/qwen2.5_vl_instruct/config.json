@@ -1,1 +1,0 @@
-{"image_resolution": 262144, "cutoff_len": 1024, "max_model_len": 16384, "n": 10, "max_tokens": 1024, "max_num_seqs": 32, "chunk_size": 500}

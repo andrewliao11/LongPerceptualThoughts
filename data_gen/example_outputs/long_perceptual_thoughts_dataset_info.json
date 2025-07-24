@@ -1,6 +1,6 @@
 {
-    "long_perceptual_thoughts/sft_docci_all_mcqs": {
-        "file_name": "/fs01/home/andrewliao/research/test/LongPerceptualThoughts/data_gen/outputs/sft_docci_all_mcqs.json",
+    "long_perceptual_thoughts_stage_1/5_images": {
+        "file_name": "/fs01/home/andrewliao/research/release/LongPerceptualThoughts/data_gen/outputs/sft_docci_5_images_mcqs.json",
         "formatting": "sharegpt",
         "columns": {
             "messages": "messages",
@@ -14,8 +14,38 @@
             "system_tag": "system"
         }
     },
-    "long_perceptual_thoughts/sft_docci_thought_expansion": {
-        "file_name": "/fs01/home/andrewliao/research/test/LongPerceptualThoughts/data_gen/outputs/sft_docci_thought_expansion.json",
+    "long_perceptual_thoughts_stage_1_direct_answer/5_images": {
+        "file_name": "/fs01/home/andrewliao/research/release/LongPerceptualThoughts/data_gen/outputs/sft_direct_answer_docci_5_images_mcqs.json",
+        "formatting": "sharegpt",
+        "columns": {
+            "messages": "messages",
+            "images": "images"
+        },
+        "tags": {
+            "role_tag": "role",
+            "content_tag": "content",
+            "user_tag": "user",
+            "assistant_tag": "assistant",
+            "system_tag": "system"
+        }
+    },
+    "long_perceptual_thoughts_stage_2/5_images": {
+        "file_name": "/fs01/home/andrewliao/research/release/LongPerceptualThoughts/data_gen/outputs/sft_docci_5_images_simple_cots.json",
+        "formatting": "sharegpt",
+        "columns": {
+            "messages": "messages",
+            "images": "images"
+        },
+        "tags": {
+            "role_tag": "role",
+            "content_tag": "content",
+            "user_tag": "user",
+            "assistant_tag": "assistant",
+            "system_tag": "system"
+        }
+    },
+    "long_perceptual_thoughts_stage_2_thought_expansion/5_images": {
+        "file_name": "/fs01/home/andrewliao/research/release/LongPerceptualThoughts/data_gen/outputs/sft_docci_5_images_thought_expansion.json",
         "formatting": "sharegpt",
         "columns": {
             "messages": "messages"
@@ -28,39 +58,8 @@
             "system_tag": "system"
         }
     },
-    "long_perceptual_thoughts/sft_docci_all_extended_cots": {
-        "file_name": "/fs01/home/andrewliao/research/test/LongPerceptualThoughts/data_gen/outputs/sft_docci_all_extended_cots.json",
-        "formatting": "sharegpt",
-        "columns": {
-            "messages": "messages",
-            "images": "images",
-            "assistant_prefix": "assistant_prefix"
-        },
-        "tags": {
-            "role_tag": "role",
-            "content_tag": "content",
-            "user_tag": "user",
-            "assistant_tag": "assistant",
-            "system_tag": "system"
-        }
-    },
-    "long_perceptual_thoughts/sft_direct_answer_docci_all_mcqs": {
-        "file_name": "/fs01/home/andrewliao/research/test/LongPerceptualThoughts/data_gen/outputs/sft_direct_answer_docci_all_mcqs.json",
-        "formatting": "sharegpt",
-        "columns": {
-            "messages": "messages",
-            "images": "images"
-        },
-        "tags": {
-            "role_tag": "role",
-            "content_tag": "content",
-            "user_tag": "user",
-            "assistant_tag": "assistant",
-            "system_tag": "system"
-        }
-    },
-    "long_perceptual_thoughts/sft_docci_all_simple_cots_weighted_sample": {
-        "file_name": "/fs01/home/andrewliao/research/test/LongPerceptualThoughts/data_gen/outputs/sft_docci_all_simple_cots_weighted_sample.json",
+    "long_perceptual_thoughts_stage_3/5_images": {
+        "file_name": "/fs01/home/andrewliao/research/release/LongPerceptualThoughts/data_gen/outputs/sft_docci_5_images_extended_cots.json",
         "formatting": "sharegpt",
         "columns": {
             "messages": "messages",
