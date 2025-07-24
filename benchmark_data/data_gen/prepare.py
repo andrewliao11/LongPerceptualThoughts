@@ -204,15 +204,33 @@ def _prepare_mmvp_bench():
 def _prepare_mmstar_bench():
     
     def _parse_mmstar_bench_choices(x):
-        hint = "\nOptions: "
         
-        choices = x["question"].split(hint)[-1]
-        pattern = r'([A-Z]): (.*?)(?= [A-Z]:|$)'
+        question = x["question"]
+        question = re.sub(r'\b([A-D]):', r'(\1)', question)
+        # Match options like (A) ..., (B) ..., supporting multiline content
+        pattern = r'\(([A-D])\)\s*(.*?)(?=\s*\([A-D]\)|\Z)'  # \Z = end of string
+        matches = re.findall(pattern, question, re.DOTALL)
 
-        matches = re.findall(pattern, choices)
-        result = [(label, text.strip().rstrip(",")) for label, text in matches]
-        result = [f'({label}) {text}' for label, text in result if text not in ["nan"]]
-        return result
+        # Format final output
+        return [f'({label}) {text.strip()}' for label, text in matches if text not in ["nan"]]
+        
+        """
+        pattern = r'([A-D]):(.*?)(?=(?: [A-D]:|$))'
+
+        matches = re.findall(pattern, x["question"], re.DOTALL)
+
+        # Format the results as desired
+        result = [f'({label}){text.strip()}' for label, text in matches]
+
+        # hint = "\nOptions: "
+        
+        # choices = x["question"].split(hint)[-1]
+        # pattern = r'([A-Z]): (.*?)(?= [A-Z]:|$)'
+
+        # matches = re.findall(pattern, choices)
+        # result = [(label, text.strip().rstrip(",")) for label, text in matches]
+        # result = [f'({label}) {text}' for label, text in result if text not in ["nan"]]
+        return result"""
     
     assert os.path.exists("./outputs/MMStar"), \
         "Please download MMStar bench images to `./outputs/MMStar`"
@@ -220,7 +238,7 @@ def _prepare_mmstar_bench():
     mmstar_bench_dir = Path("./outputs/MMStar")
     df = pd.read_parquet(mmstar_bench_dir / "mmstar.parquet")
     df["choices"] = df.apply(_parse_mmstar_bench_choices, axis=1)
-    df["question"] = df["question"].apply(lambda x: x.split("\nOptions: ")[0].strip())
+    df["question"] = df["question"].apply(lambda x: x.split("Options:")[0].split("Choices:")[0].split("Question:")[-1].strip())
     df["answer"] = df["answer"].apply(lambda x: f"({x})")
     
     SELECTED_CATEGORIES = ['coarse perception', 'fine-grained perception', 'instance reasoning']
@@ -239,6 +257,7 @@ def _prepare_mmstar_bench():
     
     df["image_path"] = image_paths
     df.drop(columns=["image"], inplace=True)
+    
     df.to_csv(os.path.join(os.environ["BENCHMARK_DATASET_DIR"], "tsv_files", "mmstar_bench.tsv"), sep="\t")
     
        
