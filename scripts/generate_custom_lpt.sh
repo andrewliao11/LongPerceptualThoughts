@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Download dataset
-cd docci
+cd data_gen/caption_datasets/docci
 # Check and download docci_descriptions.jsonlines
 if [ ! -f docci_descriptions.jsonlines ]; then
     echo "Downloading docci_descriptions.jsonlines..."
@@ -38,11 +38,6 @@ export DISABLE_VERSION_CHECK=1 # Disable version check for llama_factory
 N_IMGS=5
 DATASET_TAG=${N_IMGS}_images
 FILTER_INCONSISTENT_COT=False
-
-# Feel free to change this phrase to any other cognitive phrase you want to use. 
-# This phrase corresponds to the cognitive cues mentioned in Section 2.3 of the paper.
-export QWEN2_5_VL_INSTRUCT_PATH="/PATH/TO/QWEN2.5-VL-INSTRUCT-7B"
-export R1_DISTILLED_QWEN_32_B="/PATH/TO/R1-DISTILLED-QWEN-32B"
 
 
 # Stage 1: Generate MCQs from captions

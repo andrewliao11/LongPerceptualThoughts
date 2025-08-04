@@ -1,156 +1,85 @@
 # LongPerceptualThoughts
 
-A framework for enriching visual reasoning with long chain-of-thoughts. We introduce a synthetic dataset that distills System-2-style reasoning into System-1 visual tasks, improving perceptual grounding and transfer to language tasks.
+A data engine that produces long **Chain-of-thoughts** (CoTs) data for visual reasoning. This is a joint work with Sven Elflein, Liu He, Laura Leal-Taixé, Yejin Choi, Sanja Fidler, and David Acuna.
 
 [**paper**](https://arxiv.org/abs/2504.15362) |
 [**website**](https://andrewliao11.github.io/LongPerceptualThoughts/) |
-[**dataset host on Huggingface**](https://huggingface.co/datasets/andrewliao11/LongPerceptualThought) |
+[**dataset host on Huggingface**](https://huggingface.co/datasets/andrewliao11/LongPerceptualThoughts-30k) |
+[**checkpoints on Huggingface**](https://huggingface.co/collections/andrewliao11/longperceptualthoughts-6882358a8a6143fe5b4c5f44) |
 [**X post**](https://x.com/andrewliao11/status/1917602672493973818)
 
 ![](./assets/overall_pipeline.gif)
 
 ## News
+- ⭐ 2025/08/05: released checkpoints
 - ⭐ 2025/05/26: updated LLaMA-Factory version for DPO training
 - ⭐ 2025/05/23: released train and eval code 
 - ⭐ 2025/05/09: released code for data generation
 - ⭐ 2025/04/21: released paper and dataset
 
-## Prerequisite
-1. CUDA==11.8
-2. torch==2.5.1
-3. transformers>=4.51.3 (tested on 4.51.3)
-4. xformers==v0.0.27.post2
-
 ## 🔧 Usage
 
-<details>
-<summary>Conda env setup</summary>
 
-Here is the line-by-line commands to install conda environment:
-<pre><code>conda create -n long_perceptual_thoughts python=3.11 -y
-conda install gcc=9 gxx=9 cmake -c conda-forge -y
-conda install pytorch==2.5.1 torchvision==0.20.1 pytorch-cuda=11.8  -c pytorch -c nvidia -y
-pip install git+https://github.com/huggingface/transformers@b1a2de075de86564f7e635f3b31a68b5f33e4cac --no-cache-dir
-conda install -c conda-forge accelerate==0.34.0 peft==0.12.0 trl==0.9.6 -y
-conda install -c conda-forge fire openai pandarallel -y 
-pip install xformers==v0.0.27.post2 --index-url https://download.pytorch.org/whl/cu118 --no-deps
-pip install setuptools_scm tqdm pandas omegaconf datasets==3.1.0
+### Environment setup
 
-# only for training
-pip install deepspeed==0.15.4 liger-kernel matplotlib wandb
+Prerequisites
 
-cd third_party_packages/vllm/
-python use_existing_torch.py
-pip install -e . --no-build-isolation -v
+1. CUDA==12.4
+2. torch==2.6.0
+3. transformers==4.53.2
+4. xformers==0.0.29.post2
 
-cd ../LLaMA-Factory
-pip install -e . --no-build-isolation --no-deps -v
-</code></pre>
 
-Alternatively, you can install conda environment using the provided <code>.yml</code> file
-<pre><code>conda create --name long_perceptual_thoughts --file environment.yml
+Simple environment setup
 
-pip install xformers==v0.0.27.post2 --index-url https://download.pytorch.org/whl/cu118 --no-deps
-pip install setuptools_scm tqdm pandas omegaconf datasets==3.1.0
+```
+git clone https://github.com/andrewliao11/LongPerceptualThoughts.git --recursive
+cd LongPerceptualThoughts/
 
-# only for training
-pip install deepspeed==0.15.4 liger-kernel matplotlib wandb
-
-cd third_party_packages/vllm/
-python use_existing_torch.py
-pip install -e . --no-build-isolation -v
-
-cd ../LLaMA-Factory
-pip install -e . --no-build-isolation --no-deps -v
-</code></pre>
-
-</details>
+conda env create -f environment.yml -n LongPerceptualThoughts
+# or use the script to install the environment line-by-line:
+# conda create -n LongPerceptualThoughts python==3.10 -y
+# conda activate LongPerceptualThoughts
+# bash scripts/install_conda_env.sh
+```
 
 Note: Both LLaMA-Factory and vllm are actively developed open-source projecets and the code might break when there are version mismatches.
 
 
-### Data synthesis
+### Evaluate our checkpoints
 
-We provide a three-stage data synthesis pipeline using image-caption datasets (e.g., [google/DOCCI](https://huggingface.co/datasets/google/docci)) to generate:
-
-- Multiple-choice questions (MCQs)
-- Short chain-of-thoughts (CoTs)
-- Long CoTs
-The output is a JSON format compatible with LLaMA-Factory.
-For details, see the data generation README at [here](./data_gen/README.md)
-
+The following snippet will download and prepare the benchmark data in ShareGPT format. Then download our checkpoints for evaluation.
 ```bash
-# Prepare DOCCI or your own dataset first
-# Check the website at https://google.github.io/docci/#downloads
-cd data_gen/caption_datasets/docci
-wget https://storage.googleapis.com/docci/data/docci_descriptions.jsonlines
-wget https://storage.googleapis.com/docci/data/docci_images.tar.gz
-tar -xvf docci_images.tar.gz
-
-cd ../../
-
-export DISABLE_VERSION_CHECK=1
-export PROJECT_ROOT="/PATH/TO/GITHUB/ROOT/"
-export LLAMAFACTORY_DIR="${PROJECT_ROOT}/third_party_packages/LLaMA-Factory"
-bash run_3_stages_test.sh
+# 1. Prepare evaluation benchmark
+bash ./scripts/prepare_benchmark.sh
+# 2. Run evaluation using vllm and LLaMA-factory
+bash ./scripts/evaluate_lpt_checkpoints.sh
 ```
 
-### SFT/DPO Training using LLaMA-Factory
+### Generate your own LongPerceptualThoughts
 
-**IMPORTANT**
-Before SFT/DPO training using LLaMA-Factory, you need to register the custom dataset by modifying `LLaMA-Facotry/data/dataset_info.json`. 
+We provide a three-stage data synthesis pipeline using image-caption datasets (e.g., [google/DOCCI](https://huggingface.co/datasets/google/docci)) to generate multiple-choice questions, short CoTs and long CoTs.
 
-Here is an example:
-```json
-"long_perceptual_thoughts/sft_docci_all_extended_cots": {
-      "file_name": /PATH/TO/DATASET/JSON,
-      "formatting": "sharegpt",
-      "columns": {
-            "messages": "messages",
-            "images": "images",
-            "assistant_prefix": "assistant_prefix"
-      },
-      "tags": {
-            "role_tag": "role",
-            "content_tag": "content",
-            "user_tag": "user",
-            "assistant_tag": "assistant",
-            "system_tag": "system"
-      }
-}
+```bash
+export OPENAI_API_KEY=API_KEY                                     # Model used in stage 1
+export QWEN2_5_VL_INSTRUCT_PATH="/PATH/TO/QWEN2.5-VL-INSTRUCT-7B" # Model used in stage 2
+export R1_DISTILLED_QWEN_32_B="/PATH/TO/R1-DISTILLED-QWEN-32B"    # Model used in stage 3
+bash ./scripts/generate_custom_lpt.sh
 ```
 
-#### Train and Evaluate
 
-We are resource poor. We use **four A40 GPUs** (4 8GB per GPU) for training and defer the evaluation jobs by instantiate eval jobs using another instance to speedup training. More specifically, we use **4 RTX6000 GPUs** (24 GB per GPU) to perform inference and evaluation jobs. 
+### Download pre-generated LongPerceptualThoughts and Post-train using LLaMA-Factory
 
-To disable this evaluation scheme, disable `` and `` in train config.
-
-1. **Train jobs**
 ```bash
+# Download DOCCI and the pre-generated CoTs 
+bash download_and_process_lpt_30k.sh
 export DISABLE_VERSION_CHECK=1
+export LLAMAFACTORY_DIR="LLaMA-Factory"
 llamafactory-cli train config/llama_factory_sft_train_config.yaml     # SFT training
 llamafactory-cli train config/llama_factory_dpo_train_config.yaml     # DPO training
 ```
 
-
-
-2. **Evaluation jobs**
-
-By default, we evaluate on [V* bench](https://vstar-seal.github.io). Please download the images in V* Bench from [here](https://huggingface.co/datasets/craigwu/vstar_bench).
-
-```bash
-export DISABLE_VERSION_CHECK=1
-export PROJECT_ROOT="/PATH/TO/GITHUB/ROOT/"
-export LLAMAFACTORY_DIR="${PROJECT_ROOT}/third_party_packages/LLaMA-Factory"
-
-cd benchmark_data/
-python main.py prepare_bench
-python main.py create_dataset_info
-
-cd ../
-python vllm_eval.py predict_and_eval --model_path /PATH/TO/CHECKPOINT --eval_dataset benchmark_v_star_bench --prediction_dir test/eval_sampled_greedy --temperature 0.0 --top_p 1.0 --top_k -1 --repetition_penalty 1.0 --n_samples 1 --force_thinking False --do_eval True --use_tokenized_dataset False
-```
+You might
 
 
 ## 📚 Citation

@@ -1,3 +1,7 @@
+### NOTE: add custom dataset
+custom_dataset_info_path: hf_lpt_dataset/LongPerceptualThought/LongPerceptualThoughts_dataset_info.json
+
+
 ### model
 model_name_or_path: /PATH/TO/QWEN2.5-VL-INSTRUCT-7B
 template: qwen2_vl
@@ -12,8 +16,8 @@ freeze_multi_modal_projector: True
 deepspeed: config/deepspeed/ds_z3_config.json
 
 ### dataset
-dataset_dir: third_party_packages/LLaMA-Factory/data
-dataset: long_perceptual_thoughts/sft_docci_all_extended_cots
+dataset_dir: ./LLaMA-Factory/data
+dataset: LongPerceptualThoughts_SFT
 cutoff_len: 2048
 overwrite_cache: true
 preprocessing_num_workers: 4
@@ -22,7 +26,7 @@ preprocessing_batch_size: 500
 tokenized_path: 
 
 ### output
-output_dir: outputs/example_sft_all_extended_cots
+output_dir: outputs/SFT
 logging_steps: 5
 save_steps: 50
 save_total_limit: null
@@ -31,10 +35,10 @@ plot_loss: true
 overwrite_output_dir: true
 
 ### train
-per_device_train_batch_size: 1
+per_device_train_batch_size: 256
 gradient_accumulation_steps: 1
-learning_rate: 0.00001
-num_train_epochs: 1
+learning_rate: 0.000008
+num_train_epochs: 3
 max_samples: 10000000000.0
 lr_scheduler_type: cosine
 warmup_steps: 5
@@ -45,7 +49,7 @@ gradient_checkpointing: true
 
 ### WandB
 report_to: wandb
-run_name: example_sft_all_extended_cots
+run_name: LongPerceptualThoughts_SFT
 
 flash_attn: fa2
 enable_liger_kernel: true
