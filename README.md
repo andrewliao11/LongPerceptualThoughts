@@ -2,6 +2,8 @@
 
 A data engine that produces long **Chain-of-thoughts** (CoTs) data for visual reasoning. This is a joint work with Sven Elflein, Liu He, Laura Leal-Taixé, Yejin Choi, Sanja Fidler, and David Acuna.
 
+**🎉 This paper is accepted to COLM'25. See you in Montreal**
+
 [**paper**](https://arxiv.org/abs/2504.15362) |
 [**website**](https://andrewliao11.github.io/LongPerceptualThoughts/) |
 [**dataset host on Huggingface**](https://huggingface.co/datasets/andrewliao11/LongPerceptualThoughts-30k) |
