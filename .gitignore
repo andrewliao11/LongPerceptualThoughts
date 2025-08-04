@@ -4,6 +4,7 @@ benchmark_data/benchmark_dataset_info.json
 hf_lpt_dataset/
 predictions/
 outputs/
+wandb/
 slurm.py
 
 # Byte-compiled / optimized / DLL files

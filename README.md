@@ -70,16 +70,18 @@ bash ./scripts/generate_custom_lpt.sh
 
 ### Download pre-generated LongPerceptualThoughts and Post-train using LLaMA-Factory
 
+The following snippet will first download pre-generated long CoTs from huggingface and run SFT or DPO using LLaMA-Factory.
+
 ```bash
 # Download DOCCI and the pre-generated CoTs 
 bash download_and_process_lpt_30k.sh
 export DISABLE_VERSION_CHECK=1
 export LLAMAFACTORY_DIR="LLaMA-Factory"
+# The following training configs are for references. You may need to modify `model_name_or_path`, `template`, etc if needed.
 llamafactory-cli train config/llama_factory_sft_train_config.yaml     # SFT training
 llamafactory-cli train config/llama_factory_dpo_train_config.yaml     # DPO training
 ```
 
-You might
 
 
 ## 📚 Citation

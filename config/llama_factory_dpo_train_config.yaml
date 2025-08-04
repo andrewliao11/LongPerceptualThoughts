@@ -1,4 +1,5 @@
-### NOTE: add custom dataset
+# NOTE: add custom dataset
+# In this JSON file, you need to specify your custom dataset information. If there is no custom dataset, you can comment out the following line.
 custom_dataset_info_path: hf_lpt_dataset/LongPerceptualThought/LongPerceptualThoughts_dataset_info.json
 
 
